@@ -1414,6 +1414,22 @@ async function reconcileRoutineState() {
   await scheduleRoutineAlarms(data.routines || []);
 }
 
+function normalizedManagedTabGroup(rawGroup = {}) {
+  return {
+    windowId: Number.isInteger(rawGroup.windowId) ? rawGroup.windowId : 0,
+    kind: rawGroup.kind === "linkTrail" ? "linkTrail" : "bulk",
+    sourceHost: globalThis.StillTabOrganizer.hostFromUrl(rawGroup.sourceHost) ||
+      String(rawGroup.sourceHost || "").replace(/^www\./, "").toLowerCase(),
+    autoName: safeText(rawGroup.autoName, 60) || "Related tabs",
+    semanticName: safeText(rawGroup.semanticName, 60),
+    aiNameFingerprint: safeText(rawGroup.aiNameFingerprint, 80),
+    manualName: rawGroup.manualName === true,
+    color: safeText(rawGroup.color, 20),
+    createdAt: safeTimestamp(rawGroup.createdAt, Date.now()),
+    updatedAt: safeTimestamp(rawGroup.updatedAt, Date.now())
+  };
+}
+
 function normalizedTabOrganizerState(value = {}) {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const managedGroups = {};
@@ -1422,19 +1438,7 @@ function normalizedTabOrganizerState(value = {}) {
     if (!Number.isInteger(groupId) || groupId < 0 || !rawGroup || typeof rawGroup !== "object") {
       continue;
     }
-    managedGroups[groupId] = {
-      windowId: Number.isInteger(rawGroup.windowId) ? rawGroup.windowId : 0,
-      kind: rawGroup.kind === "linkTrail" ? "linkTrail" : "bulk",
-      sourceHost: globalThis.StillTabOrganizer.hostFromUrl(rawGroup.sourceHost) ||
-        String(rawGroup.sourceHost || "").replace(/^www\./, "").toLowerCase(),
-      autoName: safeText(rawGroup.autoName, 60) || "Related tabs",
-      semanticName: safeText(rawGroup.semanticName, 60),
-      aiNameFingerprint: safeText(rawGroup.aiNameFingerprint, 80),
-      manualName: rawGroup.manualName === true,
-      color: safeText(rawGroup.color, 20),
-      createdAt: safeTimestamp(rawGroup.createdAt, Date.now()),
-      updatedAt: safeTimestamp(rawGroup.updatedAt, Date.now())
-    };
+    managedGroups[groupId] = normalizedManagedTabGroup(rawGroup);
   }
   const undoByWindow = {};
   for (const [rawWindowId, undo] of Object.entries(source.undoByWindow || {})) {
@@ -1447,7 +1451,18 @@ function normalizedTabOrganizerState(value = {}) {
             tabIds: (Array.isArray(group?.tabIds) ? group.tabIds : []).filter(Number.isInteger),
             // Older undo entries represented only newly created groups. Treat
             // missing `created` as true for backwards compatibility.
-            created: group?.created !== false
+            created: group?.created !== false,
+            restore: group?.restore && typeof group.restore === "object"
+              ? {
+                  title: safeText(group.restore.title, 60),
+                  color: safeText(group.restore.color, 20) || "grey",
+                  collapsed: group.restore.collapsed === true,
+                  index: Number.isInteger(group.restore.index) ? group.restore.index : 0,
+                  metadata: group.restore.metadata && typeof group.restore.metadata === "object"
+                    ? normalizedManagedTabGroup(group.restore.metadata)
+                    : null
+                }
+              : null
           }))
           .filter((group) => group.groupId >= 0 && group.tabIds.length)
       : [];
@@ -1521,6 +1536,82 @@ function normalizedGroupTitle(value) {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function duplicateGroupTitleKey(value) {
+  return safeText(value, 60)
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function firstTabIndex(tabs = []) {
+  const indexes = tabs.map((tab) => Number(tab?.index)).filter(Number.isInteger);
+  return indexes.length ? Math.min(...indexes) : Number.MAX_SAFE_INTEGER;
+}
+
+async function consolidateDuplicateNamedGroups(tabs, groups, state) {
+  const tabsByGroup = new Map();
+  for (const tab of tabs) {
+    if (!Number.isInteger(tab?.groupId) || tab.groupId === TAB_GROUP_NONE) continue;
+    const members = tabsByGroup.get(tab.groupId) || [];
+    members.push(tab);
+    tabsByGroup.set(tab.groupId, members);
+  }
+
+  const groupsByTitle = new Map();
+  for (const group of groups) {
+    const titleKey = duplicateGroupTitleKey(group?.title);
+    const members = tabsByGroup.get(Number(group?.id)) || [];
+    if (!titleKey || !members.length) continue;
+    const matches = groupsByTitle.get(titleKey) || [];
+    matches.push(group);
+    groupsByTitle.set(titleKey, matches);
+  }
+
+  const absorbedGroupIds = new Set();
+  const changes = [];
+  for (const matches of groupsByTitle.values()) {
+    if (matches.length < 2) continue;
+    matches.sort((left, right) => {
+      const indexDifference = firstTabIndex(tabsByGroup.get(Number(left.id))) -
+        firstTabIndex(tabsByGroup.get(Number(right.id)));
+      return indexDifference || Number(left.id) - Number(right.id);
+    });
+    const survivor = matches[0];
+    const survivorId = Number(survivor.id);
+    for (const duplicate of matches.slice(1)) {
+      const duplicateId = Number(duplicate.id);
+      const members = tabsByGroup.get(duplicateId) || [];
+      const tabIds = members.map((tab) => tab.id).filter(Number.isInteger);
+      if (!tabIds.length) continue;
+      changes.push({
+        groupId: survivorId,
+        tabIds,
+        created: false,
+        restore: {
+          title: duplicate.title,
+          color: duplicate.color || "grey",
+          collapsed: duplicate.collapsed === true,
+          index: firstTabIndex(members),
+          metadata: state.managedGroups[duplicateId] || null
+        }
+      });
+      await chrome.tabs.group({ groupId: survivorId, tabIds });
+      for (const tab of members) tab.groupId = survivorId;
+      const survivorMembers = tabsByGroup.get(survivorId) || [];
+      survivorMembers.push(...members);
+      tabsByGroup.set(survivorId, survivorMembers);
+      tabsByGroup.delete(duplicateId);
+      absorbedGroupIds.add(duplicateId);
+      delete state.managedGroups[duplicateId];
+    }
+  }
+
+  return {
+    groups: groups.filter((group) => !absorbedGroupIds.has(Number(group?.id))),
+    changes
+  };
 }
 
 function tabHost(tab) {
@@ -1856,6 +1947,12 @@ async function organizeTabsInWindow(windowId, categoryOverrides = {}, tabPlans =
       .sort((left, right) => left.tabs[0].index - right.tabs[0].index);
   }
   const state = await getTabOrganizerState();
+  const duplicateConsolidation = await consolidateDuplicateNamedGroups(
+    tabs,
+    Array.isArray(existingTabGroups) ? existingTabGroups : [],
+    state
+  );
+  const currentTabGroups = duplicateConsolidation.groups;
   const tabsByGroup = new Map();
   for (const tab of tabs) {
     if (!Number.isInteger(tab?.groupId) || tab.groupId === TAB_GROUP_NONE) continue;
@@ -1863,7 +1960,12 @@ async function organizeTabsInWindow(windowId, categoryOverrides = {}, tabPlans =
     members.push(tab);
     tabsByGroup.set(tab.groupId, members);
   }
-  const mergeableGroups = (Array.isArray(existingTabGroups) ? existingTabGroups : [])
+  const currentGroupsByPosition = [...currentTabGroups].sort((left, right) => {
+    const indexDifference = firstTabIndex(tabsByGroup.get(Number(left.id))) -
+      firstTabIndex(tabsByGroup.get(Number(right.id)));
+    return indexDifference || Number(left.id) - Number(right.id);
+  });
+  const mergeableGroups = currentTabGroups
     .filter((group) => canMergeIntoExistingGroup(
       group,
       tabsByGroup.get(Number(group?.id)) || [],
@@ -1871,7 +1973,7 @@ async function organizeTabsInWindow(windowId, categoryOverrides = {}, tabPlans =
       categoryOverrides
     ))
     .sort((left, right) => Number(left.id) - Number(right.id));
-  const changed = [];
+  const changed = [...duplicateConsolidation.changes];
   const activeTabId = tabs.find((tab) => tab.active)?.id;
   const plannedTabIds = new Set(plans.flatMap((plan) => plan.tabs.map((tab) => tab.id)));
   let insertionIndex = bulkGroupInsertionIndex(tabs);
@@ -1883,7 +1985,15 @@ async function organizeTabsInWindow(windowId, categoryOverrides = {}, tabPlans =
     Number.isInteger(candidate?.groupId) && candidate.groupId === TAB_GROUP_NONE &&
     globalThis.StillTabOrganizer.isOrganizable(candidate) && !plannedTabIds.has(candidate.id)
   )) {
-    const mergeTarget = mergeableGroups.find((group) => {
+    const exactNameTarget = currentGroupsByPosition.find((group) => {
+      const groupTabs = tabsByGroup.get(Number(group.id)) || [];
+      const proposedTitle = globalThis.StillTabOrganizer.nameForTabs(
+        [...groupTabs, tab],
+        categoryOverrides
+      );
+      return duplicateGroupTitleKey(group.title) === duplicateGroupTitleKey(proposedTitle);
+    });
+    const mergeTarget = exactNameTarget || mergeableGroups.find((group) => {
       const groupTabs = tabsByGroup.get(Number(group.id)) || [];
       if (linkedGroupAcceptsTabs(group, groupTabs, [tab], state)) return true;
       const proposedTitle = globalThis.StillTabOrganizer.nameForTabs(
@@ -1898,7 +2008,10 @@ async function organizeTabsInWindow(windowId, categoryOverrides = {}, tabPlans =
   }
 
   for (const plan of plans) {
-    const mergeTarget = mergeableGroups.find((group) => {
+    const exactNameTarget = currentGroupsByPosition.find((group) =>
+      duplicateGroupTitleKey(group.title) === duplicateGroupTitleKey(plan.title)
+    );
+    const mergeTarget = exactNameTarget || mergeableGroups.find((group) => {
       const groupTabs = tabsByGroup.get(Number(group.id)) || [];
       if (linkedGroupAcceptsTabs(group, groupTabs, plan.tabs, state)) return true;
       return normalizedGroupTitle(group.title) === normalizedGroupTitle(plan.title);
@@ -1950,10 +2063,11 @@ async function organizeTabsInWindow(windowId, categoryOverrides = {}, tabPlans =
   }
   state.undoByWindow[windowId] = { groups: changed, createdAt: Date.now() };
   await saveTabOrganizerState(state);
+  const changedGroupIds = [...new Set(changed.map(({ groupId }) => groupId))];
   const groups = await Promise.all(
-    changed.map(async ({ groupId }) => {
+    changedGroupIds.map(async (groupId) => {
       const metadata = state.managedGroups[groupId];
-      const existingGroup = existingTabGroups.find((group) => Number(group?.id) === groupId);
+      const existingGroup = currentTabGroups.find((group) => Number(group?.id) === groupId);
       const fallbackName = metadata?.autoName || existingGroup?.title || "Related tabs";
       return globalThis.StillTabOrganizer.groupPayload(
         groupId,
@@ -1962,13 +2076,18 @@ async function organizeTabsInWindow(windowId, categoryOverrides = {}, tabPlans =
       );
     })
   );
-  const newGroups = groups.filter((_group, index) => changed[index].created);
+  const createdGroupIds = new Set(
+    changed.filter((item) => item.created).map((item) => item.groupId)
+  );
+  const newGroups = groups.filter((group) => createdGroupIds.has(group.id));
   return {
     ok: true,
     groups,
     newGroups,
     undoAvailable: true,
-    mergedGroups: changed.filter((item) => !item.created).map((item) => item.groupId),
+    mergedGroups: [...new Set(
+      changed.filter((item) => !item.created).map((item) => item.groupId)
+    )],
     usedLocalFallback
   };
 }
@@ -1978,10 +2097,28 @@ async function undoTabOrganization(windowId) {
   const state = await getTabOrganizerState();
   const undo = state.undoByWindow[windowId];
   if (!undo?.groups?.length) return { ok: false, reason: "nothing-to-undo" };
-  for (const { groupId, tabIds, created = true } of undo.groups) {
+  for (const { groupId, tabIds, created = true, restore = null } of undo.groups) {
     const currentTabs = await tabsInGroup(groupId);
     const currentIds = new Set(currentTabs.map((tab) => tab.id));
     const ownedIds = tabIds.filter((tabId) => currentIds.has(tabId));
+    if (restore) {
+      if (!ownedIds.length || !chrome.tabs.group || !chrome.tabGroups?.update) continue;
+      const restoredGroupId = await chrome.tabs.group({ tabIds: ownedIds });
+      await safeTabGroupUpdate(restoredGroupId, {
+        title: restore.title,
+        color: restore.color,
+        collapsed: restore.collapsed
+      });
+      await safeTabGroupMove(restoredGroupId, restore.index);
+      if (restore.metadata) {
+        state.managedGroups[restoredGroupId] = {
+          ...restore.metadata,
+          windowId,
+          updatedAt: Date.now()
+        };
+      }
+      continue;
+    }
     if (ownedIds.length) await chrome.tabs.ungroup(ownedIds);
     if (created) delete state.managedGroups[groupId];
   }

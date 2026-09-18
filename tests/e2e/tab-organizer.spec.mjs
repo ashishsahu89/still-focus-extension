@@ -103,3 +103,67 @@ test("organize tabs merges same-domain tabs into an existing linked group", asyn
     await rm(userDataDir, { recursive: true, force: true });
   }
 });
+
+test("organize tabs consolidates duplicate group names regardless of creator", async () => {
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "still-playwright-"));
+  let context;
+
+  try {
+    context = await chromium.launchPersistentContext(userDataDir, {
+      headless: false,
+      viewport: { width: 1280, height: 800 },
+      args: [
+        "--disable-crash-reporter",
+        "--disable-crashpad",
+        `--disable-extensions-except=${extensionPath}`,
+        `--load-extension=${extensionPath}`
+      ]
+    });
+
+    const worker = await waitForServiceWorker(context);
+    const extensionId = new URL(worker.url()).host;
+    await openUnreachableTab(context, "http://alpha.test/one");
+    await openUnreachableTab(context, "http://alpha.test/two");
+    await openUnreachableTab(context, "http://beta.test/one");
+    await openUnreachableTab(context, "http://beta.test/two");
+
+    await worker.evaluate(async () => {
+      const tabs = (await chrome.tabs.query({})).filter((tab) =>
+        tab.url?.startsWith("http://alpha.test/") || tab.url?.startsWith("http://beta.test/")
+      );
+      const alphaTabs = tabs.filter((tab) => tab.url.startsWith("http://alpha.test/"));
+      const betaTabs = tabs.filter((tab) => tab.url.startsWith("http://beta.test/"));
+      const leftGroupId = await chrome.tabs.group({ tabIds: alphaTabs.map((tab) => tab.id) });
+      const rightGroupId = await chrome.tabs.group({ tabIds: betaTabs.map((tab) => tab.id) });
+      await chrome.tabGroups.update(leftGroupId, {
+        title: "Project Alpha",
+        color: "blue",
+        collapsed: false
+      });
+      await chrome.tabGroups.update(rightGroupId, {
+        title: "Project Alpha",
+        color: "red",
+        collapsed: true
+      });
+    });
+
+    const popup = await context.newPage();
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await popup.locator("#organize-tabs").click();
+    await popup.locator("#tab-organizer-status").waitFor({ state: "visible" });
+
+    const result = await worker.evaluate(async () => ({
+      tabs: (await chrome.tabs.query({})).filter((tab) =>
+        tab.url?.startsWith("http://alpha.test/") || tab.url?.startsWith("http://beta.test/")
+      ).map(({ id, groupId }) => ({ id, groupId })),
+      groups: (await chrome.tabGroups.query({})).filter((group) => group.title === "Project Alpha")
+    }));
+
+    assert.equal(result.groups.length, 1, "same-name groups should consolidate");
+    assert.equal(new Set(result.tabs.map(({ groupId }) => groupId)).size, 1);
+    assert.equal(result.tabs[0].groupId, result.groups[0].id);
+  } finally {
+    await context?.close();
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});

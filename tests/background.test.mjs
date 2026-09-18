@@ -201,8 +201,18 @@ function createHarness({
         const ids = (Array.isArray(tabIds) ? tabIds : [tabIds]).filter(Number.isInteger);
         const id = Number.isInteger(groupId) ? groupId : nextGroupId++;
         if (!tabGroups.has(id)) tabGroups.set(id, { id, title: "", color: "grey", collapsed: false });
+        const previousGroupIds = new Set(
+          tabState
+            .filter((tab) => ids.includes(tab.id) && Number.isInteger(tab.groupId) && tab.groupId !== -1)
+            .map((tab) => tab.groupId)
+        );
         for (const tab of tabState) {
           if (ids.includes(tab.id)) tab.groupId = id;
+        }
+        for (const previousGroupId of previousGroupIds) {
+          if (previousGroupId !== id && !tabState.some((tab) => tab.groupId === previousGroupId)) {
+            tabGroups.delete(previousGroupId);
+          }
         }
         return id;
       },
@@ -1539,6 +1549,72 @@ test("keeps the active tab's new bulk group open for orientation", async () => {
   assert.equal(harness.tabGroups.get(1).collapsed, false);
 });
 
+test("organize tabs consolidates duplicate group names and undo restores them", async () => {
+  const harness = createHarness({
+    initialState: baseState(),
+    initialSessionState: {
+      tabOrganizerState: {
+        managedGroups: {
+          12: {
+            windowId: 1,
+            kind: "bulk",
+            autoName: "Project Alpha",
+            manualName: false,
+            color: "blue"
+          },
+          3: {
+            windowId: 1,
+            kind: "bulk",
+            autoName: "Project Alpha",
+            manualName: true,
+            color: "red"
+          }
+        }
+      }
+    },
+    tabs: [
+      { id: 1, windowId: 1, index: 0, active: false, groupId: 12, url: "https://example.com/one", title: "One" },
+      { id: 2, windowId: 1, index: 1, active: false, groupId: 12, url: "https://example.com/two", title: "Two" },
+      { id: 3, windowId: 1, index: 2, active: true, groupId: 3, url: "https://another.test/one", title: "Three" },
+      { id: 4, windowId: 1, index: 3, active: false, groupId: 3, url: "https://another.test/two", title: "Four" }
+    ]
+  });
+  harness.tabGroups.set(12, {
+    id: 12,
+    windowId: 1,
+    title: "Project Alpha",
+    color: "blue",
+    collapsed: false
+  });
+  harness.tabGroups.set(3, {
+    id: 3,
+    windowId: 1,
+    title: "Project Alpha",
+    color: "red",
+    collapsed: true
+  });
+  await settle();
+
+  const organised = await harness.send({ type: "ORGANIZE_TABS" });
+
+  assert.equal(organised.ok, true);
+  assert.deepEqual(Array.from(organised.mergedGroups), [12]);
+  assert.deepEqual(harness.tabs.filter((tab) => tab.groupId === 12).map((tab) => tab.id), [1, 2, 3, 4]);
+  assert.equal(harness.tabGroups.has(3), false);
+  assert.equal(harness.tabGroups.get(12).title, "Project Alpha");
+
+  const undone = await harness.send({ type: "UNDO_TAB_ORGANIZATION" });
+  assert.equal(undone.ok, true);
+  assert.deepEqual(harness.tabs.filter((tab) => tab.groupId === 12).map((tab) => tab.id), [1, 2]);
+  const restoredGroup = Array.from(harness.tabGroups.values()).find(
+    (group) => group.id !== 12 && group.title === "Project Alpha"
+  );
+  assert.ok(restoredGroup);
+  assert.equal(restoredGroup.color, "red");
+  assert.equal(restoredGroup.collapsed, true);
+  assert.deepEqual(harness.tabs.filter((tab) => tab.groupId === restoredGroup.id).map((tab) => tab.id), [3, 4]);
+});
+
 test("adds matching ungrouped tabs to an unchanged existing group and undoes only the additions", async () => {
   const harness = createHarness({
     initialState: baseState(),
@@ -1716,7 +1792,7 @@ test("leaves a renamed existing group alone and creates a separate matching grou
   assert.equal(harness.tabGroups.get(7).title, "My project");
 });
 
-test("respects Still's manual-name marker even when the current title matches", async () => {
+test("an exact group-name match merges even when the user named the group", async () => {
   const harness = createHarness({
     initialState: baseState(),
     initialSessionState: {
@@ -1743,10 +1819,10 @@ test("respects Still's manual-name marker even when the current title matches", 
 
   const organised = await harness.send({ type: "ORGANIZE_TABS" });
   assert.equal(organised.ok, true);
-  assert.deepEqual(Array.from(organised.mergedGroups), []);
+  assert.deepEqual(Array.from(organised.mergedGroups), [7]);
   assert.equal(harness.tabs.find((tab) => tab.id === 1).groupId, 7);
-  assert.equal(harness.tabs.find((tab) => tab.id === 2).groupId, 1);
-  assert.equal(harness.tabs.find((tab) => tab.id === 3).groupId, 1);
+  assert.equal(harness.tabs.find((tab) => tab.id === 2).groupId, 7);
+  assert.equal(harness.tabs.find((tab) => tab.id === 3).groupId, 7);
 });
 
 test("bulk organization inserts after existing groups instead of after ordinary tabs", async () => {

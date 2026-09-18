@@ -136,7 +136,7 @@ User experience is paramount. Still should feel calm, clear, private, and useful
 - `PRIVACY_POLICY.md` is ready to publish at the repository's default-branch URL.
 - `CHROME_WEB_STORE_LISTING.md` contains the listing copy, single-purpose statement, permission justifications, data disclosure, reviewer steps, and asset checklist.
 - `npm run package:extension` creates a clean `dist/still-focus-extension-v<version>.zip` containing only runtime files and icons. `dist/` is ignored by Git.
-- The existing 1440 × 900 intervention render is a valid screenshot candidate, and `assets/promo-tile-440x280.png` is ready for the dashboard. The editable source is `assets/promo-tile.svg`.
+- `assets/store-screenshot-intervention-1280x800.png` and `assets/promo-tile-440x280.png` are ready for the dashboard. The promo tile's editable source is `assets/promo-tile.svg`.
 
 ## Latest release-preparation commits
 

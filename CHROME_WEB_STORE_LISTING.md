@@ -39,7 +39,7 @@ English
 
 ## Single purpose
 
-Still helps people stay intentional while browsing by pausing distracting sites and keeping focus work organized.
+Still helps users stay focused in Chrome by interrupting distracting browsing and organizing tabs around the task at hand.
 
 ## Permission justifications
 
@@ -55,7 +55,11 @@ Still helps people stay intentional while browsing by pausing distracting sites 
 | `tabs` | Reads and updates the tabs you choose to protect or organize, including their titles and domains. |
 | `tabGroups` | Creates, names, colors, collapses, and updates Chrome tab groups. |
 | `webNavigation` | Detects navigations and history changes so protection and linked-tab behavior remain current. |
-| `<all_urls>` | Supports any site you choose to protect and lets the one-click organizer work on ordinary web tabs in any domain. |
+| `<all_urls>` | Supports any site you choose to protect, lets the one-click organizer work on ordinary web tabs in any domain, and permits requests to an AI endpoint only when you explicitly configure and enable that connection. |
+
+## Remote code declaration
+
+**No.** Still does not download or execute remotely hosted code. Connected AI responses are processed only as data.
 
 ## Data disclosure
 
@@ -76,11 +80,11 @@ Still's use of browsing activity and any authentication information is limited t
 
 ## Reviewer instructions
 
-1. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the extension folder.
-2. Open a few ordinary web pages, open Still, and click **Organise tabs**. The action creates conservative local groups and does not require an account or AI connection.
-3. Open **Settings** from the popup to review Protection, Routines, AI, and Data & privacy.
-4. To test focus protection, add a site under **Protection**, start a short focus session, and open that site in another tab.
-5. AI is optional. No credentials are required for review. If testing a connected provider, the reviewer must supply their own endpoint and key.
+1. Install and open the submitted extension. Still requires no account or credentials.
+2. Open several ordinary pages, such as two GitHub pages and two news or social pages.
+3. Open Still from the Chrome toolbar and click **Organize tabs**. Local grouping works without AI.
+4. Open **Settings**, add a site under **Focus**, start a short focus session, and then visit that site to see the pause screen.
+5. AI is optional and is not needed for review. A connection works only after the reviewer supplies and enables their own compatible endpoint and key.
 
 ## Distribution recommendation
 
@@ -89,7 +93,12 @@ Start with **Unlisted** distribution for review and a small pilot. Switch to **P
 ## Asset checklist
 
 - `assets/icon-128.png` — ready (128 × 128).
-- `assets/intervention-render-1440.png` — suitable screenshot (1440 × 900).
+- `assets/store-screenshot-intervention-1280x800.png` — ready (1280 × 800).
 - `assets/promo-tile-440x280.png` — ready (440 × 280).
-- Add at least one 1280 × 800 or 640 × 400 screenshot if the dashboard rejects the current render.
 - `assets/popup-render.png` is 400 × 600 and is not a promotional tile; use it only as an optional product image.
+
+## Store links
+
+- **Website:** `https://github.com/ashishsahu89/Still-Extension`
+- **Support:** `https://github.com/ashishsahu89/Still-Extension/issues`
+- **Privacy policy:** `https://github.com/ashishsahu89/Still-Extension/blob/main/PRIVACY_POLICY.md`
