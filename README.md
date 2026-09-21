@@ -1,6 +1,7 @@
 # Still
 
 Still is a private, local-first Chrome extension for interrupting autopilot browsing and protecting focused work.
+Get it on Chrome Webstore: https://chromewebstore.google.com/detail/eiijncfohledpijjmjkbblopbinbgikm?authuser=0&hl=en-GB
 
 ## What it has
 
